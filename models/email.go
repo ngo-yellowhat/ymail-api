@@ -1,5 +1,7 @@
 package models
 
+import "fmt" //  добавил импорт
+
 type Email struct {
 	ID      string `json:"id"`
 	From    string `json:"from"`
@@ -10,11 +12,11 @@ type Email struct {
 
 // для логов
 func (e *Email) ShortName() string {
-	return "[" + e.ID + "] " + e.Subject
+	return fmt.Sprintf("[%s] %s", e.ID, e.Subject) //  заменил на Sprintf
 }
 
 func (e *Email) IsEmpty() bool {
-	return e.From == "" && e.To == "" && e.Body == "" // хз, пригодится ли
+	return e.From == "" && e.To == "" && e.Body == "" // Надо ли оно ?
 }
 
 // func (e *Email) Validate() error {

@@ -1,87 +1,101 @@
 package main
- 
+
 import (
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sync"
-	"time"
- 
+
+	"github.com/google/uuid"
 	"mail-api/models"
 )
- 
+
 var (
 	mails = []models.Email{}
-	mu    sync.Mutex //  гонки 
+	mu    sync.Mutex // гонки
 )
- 
+
+// чтобы ошибки тоже json отдавали
+func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	fmt.Fprintf(w, `{"error": %q}`, msg)
+}
+
 func main() {
 	http.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status": "ok"}`))
 	})
- 
+
 	http.HandleFunc("/api/messages", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
- 
+
 		switch r.Method {
 		case "GET":
+			// чтобы медленный клиент не держал мьютекс
 			mu.Lock()
-			json.NewEncoder(w).Encode(mails)
+			snapshot := slices.Clone(mails)
 			mu.Unlock()
- 
+			
+			json.NewEncoder(w).Encode(snapshot)
+
 		case "POST":
 			var msg models.Email
 			if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 				log.Println("Ошибка парсинга JSON:", err)
-				http.Error(w, `{"err": "json broken"}`, 400) // ПЕРЕДЕЛать
+				jsonError(w, "json broken", 400) // ПЕРЕДЕЛать
 				return
 			}
-						if msg.IsEmpty() {
-				http.Error(w, `{"err": "пустое письмо"}`, 400)
+			if msg.IsEmpty() {
+				jsonError(w, "пустое или слишком длинное письмо", 400)
 				return
 			}
- 
-			// Генер id
-			msg.ID = fmt.Sprintf("%d", time.Now().UnixNano())
- 
+
+			// uuid вместо нано, чтоб не было дублей
+			msg.ID = uuid.New().String()
+
 			mu.Lock()
 			mails = append(mails, msg)
 			mu.Unlock()
- 
-			log.Println("Добавлено письмо:", msg.ShortName())
+
+			// %q 
+			log.Printf("added %q", msg.ShortName())
 			w.WriteHeader(201)
 			json.NewEncoder(w).Encode(msg)
- 
+
 		default:
-			http.Error(w, `{"error": "method not allowed"}`, http.StatusMethodNotAllowed)
+			jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
- 
+
 	http.HandleFunc("/api/messages/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "DELETE" {
-			http.Error(w, `{"error": "only delete here"}`, 405)
+			jsonError(w, "only delete here", 405)
 			return
 		}
- 
+
 		id := r.URL.Path[len("/api/messages/"):]
- 
+
 		mu.Lock()
 		defer mu.Unlock()
- 
+
 		for i, m := range mails {
 			if m.ID == id {
 				mails = append(mails[:i], mails[i+1:]...)
 				log.Println("Удалили письмо с ID:", id)
-				fmt.Fprintf(w, `{"ok": true}`)
+				w.Write([]byte(`{"ok": true}`))
 				return
 			}
 		}
- 
-		http.Error(w, `{"error": "no such email"}`, 404)
+
+		jsonError(w, "no such email", 404)
 	})
- 
-	fmt.Println("Готово")
-	http.ListenAndServe("localhost:8080", nil)
+
+	fmt.Println("Слушаю порт 8080")
+	if err := http.ListenAndServe("localhost:8080", nil); err != nil {
+		log.Fatal(err)
+	}
 }
